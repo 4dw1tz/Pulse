@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Go (for httpx and dalfox) ─────────────────────────────────────────────────
-ENV GO_VERSION=1.22.3
+ENV GO_VERSION=1.24.2
 RUN wget -q "https://go.dev/dl/go${GO_VERSION}.linux-${TARGETARCH}.tar.gz" \
     && tar -C /usr/local -xzf "go${GO_VERSION}.linux-${TARGETARCH}.tar.gz" \
     && rm "go${GO_VERSION}.linux-${TARGETARCH}.tar.gz"
@@ -16,7 +16,12 @@ ENV PATH=$PATH:/usr/local/go/bin:/root/go/bin
 
 RUN go install github.com/projectdiscovery/httpx/cmd/httpx@latest
 RUN go install github.com/hahwul/dalfox/v2@latest
-RUN go install github.com/trufflesecurity/trufflehog/v3@latest
+
+# trufflehog uses replace directives so can't be built with go install — use pre-built binary
+RUN ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "arm64" || echo "amd64") \
+    && wget -q "https://github.com/trufflesecurity/trufflehog/releases/latest/download/trufflehog_$(curl -s https://api.github.com/repos/trufflesecurity/trufflehog/releases/latest | grep tag_name | cut -d'"' -f4 | tr -d v)_linux_${ARCH}.tar.gz" -O /tmp/trufflehog.tar.gz \
+    && tar -xzf /tmp/trufflehog.tar.gz -C /usr/local/bin trufflehog \
+    && rm /tmp/trufflehog.tar.gz
 
 # ── Ruby tools ────────────────────────────────────────────────────────────────
 RUN gem install whatweb --no-document 2>/dev/null || echo "WhatWeb install skipped"

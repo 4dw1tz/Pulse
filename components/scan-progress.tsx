@@ -2,17 +2,21 @@ import { ScanState } from "@/types/scan";
 
 // All possible agent nodes with display metadata.
 const AGENT_META: Record<string, { label: string; icon: string; tools: string }> = {
-  planner:          { label: "Planner",          icon: "🧠", tools: "language detection" },
-  recon:            { label: "Recon",             icon: "🌐", tools: "httpx · nmap · whatweb" },
-  sql_injection:    { label: "SQL Injection",     icon: "💉", tools: "sqlmap" },
-  xss:              { label: "XSS",               icon: "🎯", tools: "dalfox" },
-  static_c:         { label: "C/C++ Analysis",    icon: "🔬", tools: "cppcheck · semgrep p/c" },
-  static_analysis:  { label: "Static Analysis",   icon: "🔬", tools: "semgrep · bandit" },
-  deps_py:          { label: "Python Deps",       icon: "📦", tools: "pip-audit" },
-  deps_js:          { label: "JS Deps",           icon: "📦", tools: "npm audit" },
-  dependencies:     { label: "Dependencies",      icon: "📦", tools: "pip-audit · npm audit" },
-  secrets:          { label: "Secrets",           icon: "🔐", tools: "trufflehog · detect-secrets" },
-  report:           { label: "Report",            icon: "📄", tools: "LLM synthesis" },
+  planner:          { label: "Planner",           icon: "🧠", tools: "language detection" },
+  recon:            { label: "Recon",              icon: "🌐", tools: "httpx · nmap · whatweb" },
+  adaptive_planner: { label: "Attack Planner",     icon: "🎯", tools: "LLM reasoning" },
+  sql_injection:    { label: "SQL Injection",      icon: "💉", tools: "sqlmap" },
+  sqli:             { label: "SQL Injection",      icon: "💉", tools: "sqlmap" },
+  xss:              { label: "XSS",                icon: "🕸️", tools: "dalfox" },
+  static_c:         { label: "C/C++ Analysis",     icon: "🔬", tools: "cppcheck · semgrep p/c" },
+  static_analysis:  { label: "Static Analysis",    icon: "🔬", tools: "semgrep · bandit" },
+  static:           { label: "Static Analysis",    icon: "🔬", tools: "semgrep · bandit" },
+  deps_py:          { label: "Python Deps",        icon: "📦", tools: "pip-audit" },
+  deps_js:          { label: "JS Deps",            icon: "📦", tools: "npm audit" },
+  deps:             { label: "Dependencies",       icon: "📦", tools: "pip-audit · npm audit" },
+  dependencies:     { label: "Dependencies",       icon: "📦", tools: "pip-audit · npm audit" },
+  secrets:          { label: "Secrets",            icon: "🔐", tools: "trufflehog · detect-secrets" },
+  report:           { label: "Report",             icon: "📄", tools: "LLM synthesis" },
 };
 
 interface Props {
@@ -39,24 +43,27 @@ function agentStatus(
   return "queued";
 }
 
-export function ScanProgress({ scan }: Props) {
-  // Build the ordered list from agents_plan when available, otherwise fall back to all agents.
-  const planKeys =
-    scan.agents_plan.length > 0
-      ? ["planner", ...scan.agents_plan]
-      : Object.keys(AGENT_META);
+// Plan is "pending" (not yet expanded by adaptive_planner) when it only
+// contains the two bootstrap nodes.
+function isPlanPending(plan: string[]): boolean {
+  return plan.length === 0 || (
+    plan.length <= 2 &&
+    plan.every((k) => k === "recon" || k === "adaptive_planner")
+  );
+}
 
-  const visibleAgents = planKeys
-    .filter((key) => AGENT_META[key])
-    .map((key) => ({ key, ...AGENT_META[key] }));
+export function ScanProgress({ scan }: Props) {
+  const planKeys = ["planner", ...scan.agents_plan].filter((k) => AGENT_META[k]);
+  const pending = isPlanPending(scan.agents_plan);
 
   return (
     <div className="flex flex-col gap-1 w-full">
-      {visibleAgents.map((agent) => {
-        const status = agentStatus(agent.key, scan);
+      {planKeys.map((key) => {
+        const agent = { key, ...AGENT_META[key] };
+        const status = agentStatus(key, scan);
         return (
           <div
-            key={agent.key}
+            key={key}
             className="flex items-center justify-between px-4 py-2.5 rounded-lg bg-muted/40 border border-border/50"
           >
             <div className="flex items-center gap-3">
@@ -70,6 +77,16 @@ export function ScanProgress({ scan }: Props) {
           </div>
         );
       })}
+
+      {/* Placeholder shown while attack planner hasn't decided yet */}
+      {pending && scan.status === "running" && (
+        <div className="flex items-center gap-3 px-4 py-2.5 rounded-lg border border-dashed border-white/10 mt-1">
+          <span className="text-base w-6 text-center opacity-30">⋯</span>
+          <p className="text-xs text-white/30 italic">
+            Awaiting attack plan from recon...
+          </p>
+        </div>
+      )}
     </div>
   );
 }

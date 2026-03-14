@@ -22,5 +22,6 @@ export interface ScanState {
   findings: Finding[];
   log: string[];
   llm_log: string[];
+  plan_reasoning: string;
   report: string;
 }

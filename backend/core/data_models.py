@@ -43,6 +43,7 @@ class ScanState(BaseModel):
     # Raw LLM token stream -- each entry is one token or a control sentinel.
     # Sentinels: "\x00START:<agent>" opens a block, "\x00END" closes it.
     llm_log:       list[str] = []
+    plan_reasoning: str = ""
     report:        str = ""
 
 

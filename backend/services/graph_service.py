@@ -21,7 +21,13 @@ from langgraph.graph import END, StateGraph
 from pydantic import BaseModel
 
 from ..core.data_models import Finding, ScanStatus, Severity
-from ..core.prompts import INTERPRET_SYSTEM, REPORT_PROMPT, REPORT_SYSTEM
+from ..core.prompts import (
+    ADAPTIVE_PLAN_PROMPT,
+    ADAPTIVE_PLAN_SYSTEM,
+    INTERPRET_SYSTEM,
+    REPORT_PROMPT,
+    REPORT_SYSTEM,
+)
 from ..tools.dependencies import run_npm_audit, run_pip_audit
 from ..tools.injection import run_dalfox, run_sqlmap
 from ..tools.recon import run_httpx, run_nmap, run_whatweb
@@ -38,13 +44,14 @@ from .planner_service import plan
 class GraphState(BaseModel):
     """Mutable state threaded through every LangGraph node."""
 
-    scan_id:     str = ""
-    target:      str = ""
-    target_type: str = ""
-    languages:   list[str] = []
-    agents_plan: list[str] = []
-    findings:    list[dict] = []
-    report:      str = ""
+    scan_id:        str = ""
+    target:         str = ""
+    target_type:    str = ""
+    languages:      list[str] = []
+    agents_plan:    list[str] = []
+    findings:       list[dict] = []
+    plan_reasoning: str = ""
+    report:         str = ""
 
 
 # ── Private helpers ───────────────────────────────────────────────────────────
@@ -219,6 +226,79 @@ def planner_node(state: GraphState) -> dict:
         "target_type": scan_plan.target_type,
         "languages":   scan_plan.languages,
         "agents_plan": scan_plan.agents,
+    }
+
+
+def adaptive_planner_node(state: GraphState) -> dict:
+    """Analyse recon findings with the LLM and decide which agents to run next.
+
+    Streams reasoning to the UI via ScanStreamCallback, then updates
+    agents_plan with the LLM-chosen sequence.  Falls back to full scan
+    if the LLM response cannot be parsed.
+    """
+    _update_store(
+        state.scan_id, "adaptive_planner",
+        "Analysing recon results — building tailored attack plan...",
+        [],
+    )
+
+    # Summarise recon findings for the LLM.
+    recon_findings = [f for f in state.findings if f.get("agent") == "recon"]
+    tech_stack = "Unknown"
+    for f in recon_findings:
+        if "whatweb" in f.get("tool", "") or "recon" in f.get("agent", ""):
+            tech_stack = f.get("evidence", "Unknown")[:200]
+            break
+
+    prompt = ADAPTIVE_PLAN_PROMPT.format(
+        target=state.target,
+        recon_findings=_truncate(recon_findings, max_chars=2000) if recon_findings
+                       else "No specific findings from recon.",
+        tech_stack=tech_stack,
+    )
+
+    callback = ScanStreamCallback(scan_id=state.scan_id, agent="adaptive_planner")
+    llm = get_llm().with_config({"callbacks": [callback]})
+    response = llm.invoke([HumanMessage(content=ADAPTIVE_PLAN_SYSTEM + "\n\n" + prompt)])
+
+    # Parse the JSON plan from the LLM response.
+    VALID_AGENTS = {"sqli", "xss", "deps", "secrets", "report"}
+    fallback_agents = ["sqli", "xss", "secrets", "report"]
+    reasoning = ""
+
+    text = response.content.strip()
+    text = re.sub(r"^```(?:json)?\s*", "", text)
+    text = re.sub(r"\s*```$", "", text)
+    try:
+        parsed = json.loads(text)
+        reasoning = parsed.get("reasoning", "")
+        raw = parsed.get("agents", fallback_agents)
+        # Validate + ensure report is last.
+        chosen = [a for a in raw if a in VALID_AGENTS and a != "report"]
+        chosen.append("report")
+    except (json.JSONDecodeError, ValueError):
+        reasoning = "Could not parse LLM plan — defaulting to full scan."
+        chosen = fallback_agents
+
+    # Full plan = what already ran + the newly chosen agents.
+    full_plan = ["recon", "adaptive_planner"] + chosen
+
+    _update_store(
+        state.scan_id, "adaptive_planner",
+        f"Attack plan decided: {chosen[:-1]} — {reasoning}",
+        [],
+    )
+
+    # Push the updated plan and reasoning into the live scan store.
+    if state.scan_id:
+        from ..db.scans import scans  # avoid circular at module level
+        if state.scan_id in scans:
+            scans[state.scan_id].agents_plan    = full_plan
+            scans[state.scan_id].plan_reasoning = reasoning
+
+    return {
+        "agents_plan":    full_plan,
+        "plan_reasoning": reasoning,
     }
 
 
@@ -511,6 +591,7 @@ def report_node(state: GraphState) -> dict:
     prompt = REPORT_PROMPT.format(
         target=state.target,
         languages=languages_str,
+        plan_reasoning=state.plan_reasoning or "N/A",
         findings=findings_text,
     )
 
@@ -534,7 +615,7 @@ def report_node(state: GraphState) -> dict:
 
 # All node keys registered in the graph.
 _ALL_NODES = {
-    "recon", "sqli", "xss", "static_c", "static",
+    "recon", "adaptive_planner", "sqli", "xss", "static_c", "static",
     "deps_py", "deps_js", "deps", "secrets", "report",
 }
 
@@ -596,9 +677,10 @@ def _build_graph() -> object:
     """
     g = StateGraph(GraphState)
 
-    g.add_node("planner",   planner_node)
-    g.add_node("recon",     recon_node)
-    g.add_node("sqli",      sqli_node)
+    g.add_node("planner",          planner_node)
+    g.add_node("recon",            recon_node)
+    g.add_node("adaptive_planner", adaptive_planner_node)
+    g.add_node("sqli",             sqli_node)
     g.add_node("xss",       xss_node)
     g.add_node("static_c",  static_c_node)
     g.add_node("static",    static_node)

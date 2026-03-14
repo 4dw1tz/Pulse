@@ -128,11 +128,11 @@ def plan(target: str) -> ScanPlan:
     is_path = target.startswith("/") or target.startswith(".")
 
     if not is_path:
-        # URL target -- full network scan pipeline.
+        # URL target -- recon runs first, then adaptive_planner decides the rest.
         return ScanPlan(
             target_type="url",
             languages=[],
-            agents=["recon", "sqli", "xss", "deps", "secrets", "report"],
+            agents=["recon", "adaptive_planner"],
         )
 
     # Filesystem target -- inspect and build a tailored plan.
