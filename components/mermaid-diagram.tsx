@@ -7,6 +7,22 @@ interface MermaidDiagramProps {
   chart: string;
 }
 
+function normalizeMermaid(input: string): string {
+  let text = (input || "").trim();
+
+  text = text.replace(/^```(?:mermaid)?\s*/i, "").replace(/\s*```$/i, "").trim();
+
+  if (text.includes("\\n") && !text.includes("\n")) {
+    text = text.replace(/\\n/g, "\n");
+  }
+
+  // Standardize diagram head and common malformed edge markers from model output.
+  text = text.replace(/^graph\s+LR;?/im, "flowchart LR");
+  text = text.replace(/\|>/g, "|");
+
+  return text;
+}
+
 export function MermaidDiagram({ chart }: MermaidDiagramProps) {
   const [svg, setSvg] = useState<string>("");
   const [hasError, setHasError] = useState(false);
@@ -20,6 +36,11 @@ export function MermaidDiagram({ chart }: MermaidDiagramProps) {
     let active = true;
 
     async function renderChart() {
+      const normalized = normalizeMermaid(chart);
+      const fallback = normalized
+        .replace(/^graph\s+TB;?/im, "flowchart TB")
+        .replace(/^graph\s+TD;?/im, "flowchart TD");
+
       try {
         mermaid.initialize({
           startOnLoad: false,
@@ -28,7 +49,14 @@ export function MermaidDiagram({ chart }: MermaidDiagramProps) {
           fontFamily: "ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto",
         });
 
-        const { svg: rendered } = await mermaid.render(renderId, chart);
+        let rendered = "";
+        try {
+          const out = await mermaid.render(`${renderId}-a`, normalized);
+          rendered = out.svg;
+        } catch {
+          const out = await mermaid.render(`${renderId}-b`, fallback);
+          rendered = out.svg;
+        }
         if (!active) return;
 
         setSvg(rendered);
@@ -66,7 +94,7 @@ export function MermaidDiagram({ chart }: MermaidDiagramProps) {
   return (
     <div className="my-5 overflow-x-auto rounded-xl border border-white/10 bg-[#0d0d0d] p-4">
       <div
-        className="min-w-[460px] [&_svg]:h-auto [&_svg]:w-full"
+        className="min-w-115 [&_svg]:h-auto [&_svg]:w-full"
         dangerouslySetInnerHTML={{ __html: svg }}
       />
     </div>

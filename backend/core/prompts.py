@@ -174,6 +174,8 @@ Findings from automated scans:
 Attack Chain:
 {attack_chain_narrative}
 
+Attack Chain Status: {attack_chain_status}
+
 Attack Chain Diagram (Mermaid):
 {attack_chain_mermaid}
 
@@ -184,7 +186,9 @@ Format:
 (2-3 sentences summarising the overall security posture based strictly on the findings above.)
 
 ## Attack Chain
-(Include this section only if an attack chain narrative was provided above. Copy the narrative text here. Then include the Mermaid diagram in a fenced code block labelled ```mermaid. If no chain was identified, write: "No multi-step attack chain was identified from the automated findings.")
+(Use Attack Chain Status as the source of truth.)
+(If status is "present": include the narrative and include exactly one Mermaid fenced block.)
+(If status is "absent": write exactly "No multi-step attack chain was identified from the automated findings." and do NOT include any Mermaid block.)
 
 ## Findings
 (If the findings array is empty, state: "No vulnerabilities were detected during automated scans." and DO NOT include the table.)

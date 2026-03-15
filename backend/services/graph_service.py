@@ -32,7 +32,7 @@ from ..core.prompts import (
 from ..tools.dependencies import run_npm_audit, run_pip_audit
 from ..tools.injection import run_dalfox, run_sqlmap
 from ..tools.recon import run_httpx, run_nmap, run_whatweb
-from ..tools.secrets import run_detect_secrets, run_trufflehog
+from ..tools.secrets import run_detect_secrets, run_env_file_secret_scan, run_trufflehog
 from ..tools.static_analysis import run_bandit, run_semgrep
 from ..tools.static_c import run_cppcheck, run_semgrep_c
 from .callbacks import ScanStreamCallback
@@ -125,6 +125,19 @@ def _truncate(data: dict | list | str, max_chars: int = 4000) -> str:
     if len(text) > max_chars:
         return text[:max_chars] + "... [truncated]"
     return text
+
+
+def _normalize_severity(value: str | None) -> str:
+    """Normalize model severity strings to supported enum values."""
+    raw = str(value or "info").strip().lower()
+    aliases = {
+        "crit": "critical",
+        "warning": "medium",
+        "warn": "medium",
+        "informational": "info",
+    }
+    norm = aliases.get(raw, raw)
+    return norm if norm in _SEVERITY_RANK else "info"
 
 
 def _extract_first_json_object(text: str) -> dict | None:
@@ -453,9 +466,9 @@ def _sanitize_attack_chain(chain: dict | None) -> dict:
             "Treat this as a theoretical chain pending manual validation."
         )
 
-    mermaid = str(chain.get("mermaid", "")).strip()
-    if nodes and not mermaid:
-        mermaid = _build_mermaid_from_chain(nodes, edges)
+    # Always derive Mermaid from sanitized nodes/edges to avoid parser errors
+    # from model-produced Mermaid syntax.
+    mermaid = _build_mermaid_from_chain(nodes, edges) if nodes else ""
 
     return {
         "nodes": nodes,
@@ -511,7 +524,7 @@ def _parse_findings(agent: str, tool: str, llm_response: str) -> list[dict]:
             {
                 "agent": agent,
                 "tool": tool,
-                "severity": item.get("severity", "info"),
+                "severity": _normalize_severity(item.get("severity", "info")),
                 "title": item.get("title", "Unnamed finding"),
                 "description": item.get("description", ""),
                 "evidence": item.get("evidence", "")[:2000],
@@ -557,7 +570,7 @@ def _update_store(
                 Finding(
                     agent=f["agent"],
                     tool=f["tool"],
-                    severity=Severity(f.get("severity", "info")),
+                    severity=Severity(_normalize_severity(f.get("severity", "info"))),
                     title=f["title"],
                     description=f.get("description", ""),
                     evidence=f.get("evidence", ""),
@@ -1012,12 +1025,23 @@ def secrets_node(state: GraphState) -> dict:
 
     truffle_result = run_trufflehog.invoke({"repo_path": repo_path})
     detect_result = run_detect_secrets.invoke({"repo_path": repo_path})
-    combined = {"trufflehog": truffle_result, "detect_secrets": detect_result}
+    env_result = run_env_file_secret_scan.invoke({"repo_path": repo_path})
+    combined = {
+        "trufflehog": truffle_result,
+        "detect_secrets": detect_result,
+        "env_file_scan": env_result,
+    }
 
-    any_output = _has_real_output(truffle_result) or _has_real_output(detect_result)
+    any_output = (
+        _has_real_output(truffle_result)
+        or _has_real_output(detect_result)
+        or _has_real_output(env_result)
+    )
     if not any_output:
         errors = ", ".join(
-            e for r in (truffle_result, detect_result) if (e := r.get("error", ""))
+            e
+            for r in (truffle_result, detect_result, env_result)
+            if (e := r.get("error", ""))
         )
         _update_store(
             state.scan_id,
@@ -1030,7 +1054,7 @@ def secrets_node(state: GraphState) -> dict:
     findings = _llm_interpret(
         state.scan_id,
         "secrets",
-        "trufflehog+detect-secrets",
+        "trufflehog+detect-secrets+env-file-scan",
         combined,
         state.threat_model,
     )
@@ -1050,16 +1074,28 @@ def report_node(state: GraphState) -> dict:
     findings_text = _truncate(state.findings, max_chars=6000)
     architecture = state.architecture_summary or "N/A"
     threats = state.threat_model or "N/A"
-    chain_narrative = (
-        state.attack_chain.get("narrative", "") if state.attack_chain else ""
+    chain_state = state.attack_chain if isinstance(state.attack_chain, dict) else {}
+    chain_nodes = chain_state.get("nodes", [])
+    chain_edges = chain_state.get("edges", [])
+    has_attack_chain = bool(chain_nodes)
+    chain_narrative = str(chain_state.get("narrative", "")).strip()
+
+    if has_attack_chain and not chain_narrative:
+        chain_narrative = (
+            "The findings suggest a plausible multi-step attack path. "
+            "This chain is theoretical and should be manually validated."
+        )
+
+    chain_mermaid = (
+        _build_mermaid_from_chain(chain_nodes, chain_edges) if has_attack_chain else ""
     )
-    chain_mermaid = state.attack_chain.get("mermaid", "") if state.attack_chain else ""
 
     prompt = REPORT_PROMPT.format(
         target=state.target,
         architecture=architecture,
         threat_model=threats,
         findings=findings_text,
+        attack_chain_status="present" if has_attack_chain else "absent",
         attack_chain_narrative=chain_narrative
         or "No multi-step attack chain identified.",
         attack_chain_mermaid=chain_mermaid or "",
@@ -1069,6 +1105,24 @@ def report_node(state: GraphState) -> dict:
     llm = get_llm().with_config({"callbacks": [callback]})
     response = llm.invoke([HumanMessage(content=REPORT_SYSTEM + "\n\n" + prompt)])
     report = str(response.content or "")
+
+    # Enforce consistency between chain status and emitted report markdown.
+    no_chain_text = "No multi-step attack chain was identified from the automated findings."
+    mermaid_block_re = re.compile(r"```mermaid[\s\S]*?```", re.IGNORECASE)
+
+    if has_attack_chain:
+        safe_mermaid = chain_mermaid.replace("\\n", "\n")
+        safe_block = f"```mermaid\n{safe_mermaid}\n```"
+        report = report.replace(no_chain_text, chain_narrative)
+
+        if mermaid_block_re.search(report):
+            report = mermaid_block_re.sub(safe_block, report, count=1)
+        else:
+            report = report + "\n\n" + safe_block
+    else:
+        report = mermaid_block_re.sub("", report)
+        if "## Attack Chain" in report and no_chain_text not in report:
+            report = report.replace("## Attack Chain", f"## Attack Chain\n{no_chain_text}", 1)
 
     if state.scan_id:
         from ..db.scans import scans
