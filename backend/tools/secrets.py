@@ -47,9 +47,7 @@ def run_trufflehog(repo_path: str) -> dict:
     """
     cmd = ["trufflehog", "filesystem", repo_path, "--json", "--no-update"]
     try:
-        r = subprocess.run(
-            cmd, check=False, capture_output=True, text=True, timeout=60
-        )
+        r = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=60)
         findings = []
         for line in r.stdout.strip().splitlines():
             if line:
@@ -66,7 +64,8 @@ def run_trufflehog(repo_path: str) -> dict:
         return {"findings": findings[:20], "total": len(findings), "error": ""}
     except FileNotFoundError:
         return {
-            "findings": [], "total": 0,
+            "findings": [],
+            "total": 0,
             "error": (
                 "trufflehog not found -- install via: "
                 "go install github.com/trufflesecurity/trufflehog/v3@latest"
@@ -88,9 +87,7 @@ def run_detect_secrets(repo_path: str) -> dict:
     """
     cmd = ["detect-secrets", "scan", repo_path]
     try:
-        r = subprocess.run(
-            cmd, check=False, capture_output=True, text=True, timeout=30
-        )
+        r = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=30)
         try:
             data = json.loads(r.stdout)
             results = data.get("results", {})
@@ -102,19 +99,22 @@ def run_detect_secrets(repo_path: str) -> dict:
             return {"findings": flat[:20], "total": len(flat), "error": ""}
         except json.JSONDecodeError:
             return {
-                "findings": [], "total": 0,
+                "findings": [],
+                "total": 0,
                 "error": r.stderr[:500] if r.stderr else "",
             }
     except FileNotFoundError:
         return {
-            "findings": [], "total": 0,
+            "findings": [],
+            "total": 0,
             "error": (
                 "detect-secrets not found -- install via: pip install detect-secrets"
             ),
         }
     except subprocess.TimeoutExpired:
         return {
-            "findings": [], "total": 0,
+            "findings": [],
+            "total": 0,
             "error": "detect-secrets timed out after 30s",
         }
 
@@ -141,7 +141,9 @@ def run_env_file_secret_scan(repo_path: str) -> dict:
                 rel_path = os.path.relpath(file_path, repo_path)
 
                 try:
-                    with open(file_path, "r", encoding="utf-8", errors="ignore") as handle:
+                    with open(
+                        file_path, "r", encoding="utf-8", errors="ignore"
+                    ) as handle:
                         for line_number, raw in enumerate(handle, start=1):
                             line = raw.strip()
                             if not line or line.startswith("#") or "=" not in line:

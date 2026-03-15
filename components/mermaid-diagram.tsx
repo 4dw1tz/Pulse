@@ -10,7 +10,10 @@ interface MermaidDiagramProps {
 function normalizeMermaid(input: string): string {
   let text = (input || "").trim();
 
-  text = text.replace(/^```(?:mermaid)?\s*/i, "").replace(/\s*```$/i, "").trim();
+  text = text
+    .replace(/^```(?:mermaid)?\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
 
   if (text.includes("\\n") && !text.includes("\n")) {
     text = text.replace(/\\n/g, "\n");
@@ -46,7 +49,8 @@ export function MermaidDiagram({ chart }: MermaidDiagramProps) {
           startOnLoad: false,
           theme: "dark",
           securityLevel: "strict",
-          fontFamily: "ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto",
+          fontFamily:
+            "ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto",
         });
 
         let rendered = "";

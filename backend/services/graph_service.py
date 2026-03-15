@@ -1107,7 +1107,9 @@ def report_node(state: GraphState) -> dict:
     report = str(response.content or "")
 
     # Enforce consistency between chain status and emitted report markdown.
-    no_chain_text = "No multi-step attack chain was identified from the automated findings."
+    no_chain_text = (
+        "No multi-step attack chain was identified from the automated findings."
+    )
     mermaid_block_re = re.compile(r"```mermaid[\s\S]*?```", re.IGNORECASE)
 
     if has_attack_chain:
@@ -1122,7 +1124,9 @@ def report_node(state: GraphState) -> dict:
     else:
         report = mermaid_block_re.sub("", report)
         if "## Attack Chain" in report and no_chain_text not in report:
-            report = report.replace("## Attack Chain", f"## Attack Chain\n{no_chain_text}", 1)
+            report = report.replace(
+                "## Attack Chain", f"## Attack Chain\n{no_chain_text}", 1
+            )
 
     if state.scan_id:
         from ..db.scans import scans
